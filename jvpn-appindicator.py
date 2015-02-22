@@ -22,11 +22,12 @@ import sys
 gtk.gdk.threads_init()
 
 # Config
+APP_NAME = 'jvpn-appindicator'
 WORK_DIR = os.path.dirname(sys.argv[0]) + '/'
 jvpn_dir = '/home/alexandrov/programs/jvpn/'
 jvpn_icon = WORK_DIR + 'icons/junos-pulse.png'
 jvpn_icon_bw = WORK_DIR + 'icons/junos-pulse_bw.png'
-print jvpn_icon
+
 
 class JVPNIndicator:
     def __init__(self):
@@ -106,12 +107,16 @@ class JVPN(threading.Thread):
         super(JVPN, self).__init__()
         self.jvpnpl = jvpn_dir + 'jvpn.pl'
         self.jvpnprocess = ''
-        # TODO: Change it to use Gnome Keychain
-        self.login = 'login'
-        self.password = 'password'
+        self.keystore = Keyring()
+        self.login, self.password = self.keystore.getpass()
 
     def connect(self):
         print('Connect process was called')
+        if not self.password:
+            msg = 'You don`t have saved password or it`s empty. Sorry, I can`t work in this way'
+            show_notify(msg)
+            update_status(msg)
+            return ''
         try:
             self.jvpnprocess = subprocess.Popen([self.jvpnpl],
                                                 cwd=jvpn_dir,
@@ -121,10 +126,14 @@ class JVPN(threading.Thread):
             lines_iterator = iter(self.jvpnprocess.stdout.readline, '')
             line = ''
             for line in lines_iterator:
+                # line iterator thought jvpn.pl for communicate and parsing stdout
                 print line
                 if line.startswith('Connected'):
                     update_status(line.split(',')[0])
                     show_notify(line.split(',')[0])
+                # Todo: Change saved password
+                # elif line.startswith('Invalid user name or password'):
+                #    self.keystore.newpass()
             if line.strip() == 'Exiting':
                 line = 'Not connected'
         except BaseException as e:
@@ -140,7 +149,86 @@ class JVPN(threading.Thread):
     def run(self):
         self.connect()
         switch_btn(False)
-        #print 'end thread'
+
+
+class Keyring():
+    def __init__(self):
+        self.keyring = gnomekeyring.get_default_keyring_sync()
+        self.login = None
+        self.password = None
+
+    def getpass(self):
+        try:
+            result_list = gnomekeyring.find_items_sync(gnomekeyring.ITEM_GENERIC_SECRET, dict(appname=APP_NAME))
+        except gnomekeyring.NoMatchError:
+            # Create new credentials if nothing was found
+            self.newpass()
+        except BaseException as e:
+            # Todo: add some logging
+            pass
+        else:
+            self.login, self.password = result_list[0].secret.split('\n')
+        return self.login, self.password
+
+    def write2keyring(self):
+        gnomekeyring.item_create_sync(
+            self.keyring,
+            gnomekeyring.ITEM_GENERIC_SECRET,
+            APP_NAME,
+            dict(appname=APP_NAME),
+            "\n".join((self.login, self.password)), True)
+
+    def newpass(self):
+        dialog = gtk.Dialog("Credentials to Junos Pulse", None, 0,
+                            (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
+                             gtk.STOCK_OK, gtk.RESPONSE_OK))
+        dialog.props.has_separator = False
+        dialog.set_default_response(gtk.RESPONSE_OK)
+
+        hbox = gtk.HBox(False, 8)
+        hbox.set_border_width(8)
+        dialog.vbox.pack_start(hbox, False, False, 0)
+
+        stock = gtk.image_new_from_stock(gtk.STOCK_DIALOG_AUTHENTICATION,
+                                         gtk.ICON_SIZE_DIALOG)
+        hbox.pack_start(stock, False, False, 0)
+
+        table = gtk.Table(2, 2)
+        table.set_row_spacings(4)
+        table.set_col_spacings(4)
+        hbox.pack_start(table, True, True, 0)
+
+        label = gtk.Label("_Login")
+        label.set_use_underline(True)
+        table.attach(label, 0, 1, 0, 1)
+        local_entry1 = gtk.Entry()
+        local_entry1.set_activates_default(True)
+
+        table.attach(local_entry1, 1, 2, 0, 1)
+        label.set_mnemonic_widget(local_entry1)
+
+        label = gtk.Label("_Password")
+        label.set_use_underline(True)
+        table.attach(label, 0, 1, 1, 2)
+        local_entry2 = gtk.Entry()
+        local_entry2.set_visibility(False)
+        local_entry2.set_activates_default(True)
+
+        table.attach(local_entry2, 1, 2, 1, 2)
+        label.set_mnemonic_widget(local_entry2)
+
+        dialog.show_all()
+        while True:
+            response = dialog.run()
+            if response == gtk.RESPONSE_OK:
+                self.login = local_entry1.get_text()
+                self.password = local_entry2.get_text()
+                if self.login and self.password:
+                    self.write2keyring()
+                    break
+            else:
+                raise SystemExit
+        dialog.destroy()
 
 
 def update_status(msg):
