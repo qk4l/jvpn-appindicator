@@ -23,8 +23,11 @@ gtk.gdk.threads_init()
 
 # Config
 APP_NAME = 'jvpn-appindicator'
-WORK_DIR = os.path.dirname(sys.argv[0]) + '/'
-jvpn_dir = '/home/alexandrov/programs/jvpn/'
+WORK_DIR = os.path.dirname(os.path.realpath(__file__)) + '/'
+if len(sys.argv) > 1:
+    jvpn_dir = sys.argv[1]
+else:
+    jvpn_dir = '/opt/jvpn/'
 jvpn_icon = WORK_DIR + 'icons/junos-pulse.png'
 jvpn_icon_bw = WORK_DIR + 'icons/junos-pulse_bw.png'
 
@@ -143,7 +146,7 @@ class JVPN(threading.Thread):
             line = ''
             for line in lines_iterator:
                 # line iterator thought jvpn.pl for communicate and parsing stdout
-                print line
+                print(line)
                 if line.startswith('Connected'):
                     update_status(line.split(',')[0])
                     show_notify(line.split(',')[0])
