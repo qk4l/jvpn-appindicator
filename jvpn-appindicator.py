@@ -36,6 +36,8 @@ class JVPNIndicator:
         self.ind.set_status(appindicator.STATUS_ACTIVE)
         self.ind.set_attention_icon(jvpn_icon)
         self.ind.set_icon(jvpn_icon_bw)
+        self.keyring = Keyring()
+        self.invalid_cred = False
         # create a menu
         self.menu = gtk.Menu()
         # create items for the menu
@@ -62,10 +64,12 @@ class JVPNIndicator:
         self.menu.append(btnquit)
         self.menu.show()
         self.ind.set_menu(self.menu)
-        # jvpn thread
-        self.t_jvpn = JVPN()
+        self.t_jvpn = JVPN(None, None)
 
     def update_status(self, msg):
+        # Check status msg for future actions
+        if msg.find('Invalid user') != -1:
+            self.invalid_cred = True
         self.status.get_child().set_text(msg)
 
     def switch_btn(self, status):
@@ -81,13 +85,23 @@ class JVPNIndicator:
 
     def quit(self, widget, data=None):
         # Close jvpn tread
-        if self.t_jvpn.isAlive():
-            self.t_jvpn.disconnect()
+        try:
+            if self.t_jvpn.isAlive():
+                self.t_jvpn.disconnect()
+        except:
+            pass
         gtk.main_quit()
 
     def connect(self, widget, data=None):
+        # jvpn thread
         if not self.t_jvpn.isAlive():
-            self.t_jvpn = JVPN()
+            # Check if previous connection was failed because invalid creds
+            if self.invalid_cred:
+                self.invalid_cred = False
+                login, password = self.keyring.newpass()
+            else:
+                login, password = self.keyring.getpass()
+            self.t_jvpn = JVPN(login, password)
             # Start jvpn thread
             self.t_jvpn.start()
             self.switch_btn(True)
@@ -103,17 +117,18 @@ class JVPNIndicator:
 
 
 class JVPN(threading.Thread):
-    def __init__(self):
+    def __init__(self, login, password):
         super(JVPN, self).__init__()
         self.jvpnpl = jvpn_dir + 'jvpn.pl'
         self.jvpnprocess = ''
-        self.keystore = Keyring()
-        self.login, self.password = self.keystore.getpass()
+        self.login = login
+        self.password = password
 
     def connect(self):
         print('Connect process was called')
+
         if not self.password:
-            msg = 'You don`t have saved password or it`s empty. Sorry, I can`t work in this way'
+            msg = 'You didn`t provide password or it`s empty. Sorry, I can`t work in this way'
             show_notify(msg)
             update_status(msg)
             return ''
@@ -122,6 +137,7 @@ class JVPN(threading.Thread):
                                                 cwd=jvpn_dir,
                                                 stdin=subprocess.PIPE,
                                                 stdout=subprocess.PIPE)
+            self.jvpnprocess.stdin.write(self.login + '\n')
             self.jvpnprocess.stdin.write(self.password + '\n')
             lines_iterator = iter(self.jvpnprocess.stdout.readline, '')
             line = ''
@@ -131,9 +147,6 @@ class JVPN(threading.Thread):
                 if line.startswith('Connected'):
                     update_status(line.split(',')[0])
                     show_notify(line.split(',')[0])
-                # Todo: Change saved password
-                # elif line.startswith('Invalid user name or password'):
-                #    self.keystore.newpass()
             if line.strip() == 'Exiting':
                 line = 'Not connected'
         except BaseException as e:
@@ -149,13 +162,14 @@ class JVPN(threading.Thread):
     def run(self):
         self.connect()
         switch_btn(False)
+        print('end jvpn thread')
 
 
 class Keyring():
     def __init__(self):
         self.keyring = gnomekeyring.get_default_keyring_sync()
-        self.login = None
-        self.password = None
+        self.login = ''
+        self.password = ''
 
     def getpass(self):
         try:
@@ -193,15 +207,16 @@ class Keyring():
                                          gtk.ICON_SIZE_DIALOG)
         hbox.pack_start(stock, False, False, 0)
 
-        table = gtk.Table(2, 2)
-        table.set_row_spacings(4)
-        table.set_col_spacings(4)
+        table = gtk.Table(2, 3)
+        table.set_row_spacings(5)
+        table.set_col_spacings(5)
         hbox.pack_start(table, True, True, 0)
 
         label = gtk.Label("_Login")
         label.set_use_underline(True)
         table.attach(label, 0, 1, 0, 1)
         local_entry1 = gtk.Entry()
+        local_entry1.set_text(self.login)
         local_entry1.set_activates_default(True)
 
         table.attach(local_entry1, 1, 2, 0, 1)
@@ -211,11 +226,15 @@ class Keyring():
         label.set_use_underline(True)
         table.attach(label, 0, 1, 1, 2)
         local_entry2 = gtk.Entry()
+
         local_entry2.set_visibility(False)
         local_entry2.set_activates_default(True)
 
         table.attach(local_entry2, 1, 2, 1, 2)
         label.set_mnemonic_widget(local_entry2)
+
+        savepass_btn = gtk.CheckButton('save password')
+        table.attach(savepass_btn, 1, 2, 2, 3)
 
         dialog.show_all()
         while True:
@@ -224,11 +243,13 @@ class Keyring():
                 self.login = local_entry1.get_text()
                 self.password = local_entry2.get_text()
                 if self.login and self.password:
-                    self.write2keyring()
+                    if savepass_btn.get_active():
+                        self.write2keyring()
                     break
             else:
-                raise SystemExit
+                break
         dialog.destroy()
+        return self.login, self.password
 
 
 def update_status(msg):
