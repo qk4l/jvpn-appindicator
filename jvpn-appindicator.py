@@ -25,9 +25,9 @@ gtk.gdk.threads_init()
 APP_NAME = 'jvpn-appindicator'
 WORK_DIR = os.path.dirname(os.path.realpath(__file__)) + '/'
 if len(sys.argv) > 1:
-    jvpn_dir = sys.argv[1]
+    pulse_dir = sys.argv[1]
 else:
-    jvpn_dir = '/opt/jvpn/'
+    pulse_dir = '/usr/local/pulse/'
 jvpn_icon = WORK_DIR + 'icons/junos-pulse.png'
 jvpn_icon_bw = WORK_DIR + 'icons/junos-pulse_bw.png'
 
@@ -67,7 +67,7 @@ class JVPNIndicator:
         self.menu.append(btnquit)
         self.menu.show()
         self.ind.set_menu(self.menu)
-        self.t_jvpn = JVPN(None, None)
+        self.t_jvpn = Pulse(None, None)
 
     def update_status(self, msg):
         # Check status msg for future actions
@@ -104,7 +104,7 @@ class JVPNIndicator:
                 login, password = self.keyring.newpass()
             else:
                 login, password = self.keyring.getpass()
-            self.t_jvpn = JVPN(login, password)
+            self.t_jvpn = Pulse(login, password)
             # Start jvpn thread
             self.t_jvpn.start()
             self.switch_btn(True)
@@ -119,11 +119,11 @@ class JVPNIndicator:
         gtk.main()
 
 
-class JVPN(threading.Thread):
+class Pulse(threading.Thread):
     def __init__(self, login, password):
-        super(JVPN, self).__init__()
-        self.jvpnpl = jvpn_dir + 'jvpn.pl'
-        self.jvpnprocess = ''
+        super(Pulse, self).__init__()
+        self.pulseclient = pulse_dir + 'PulseClient.sh'
+        self.pulseprocess = ''
         self.login = login
         self.password = password
 
@@ -136,16 +136,15 @@ class JVPN(threading.Thread):
             update_status(msg)
             return ''
         try:
-            self.jvpnprocess = subprocess.Popen([self.jvpnpl],
-                                                cwd=jvpn_dir,
-                                                stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE)
-            self.jvpnprocess.stdin.write(self.login + '\n')
-            self.jvpnprocess.stdin.write(self.password + '\n')
-            lines_iterator = iter(self.jvpnprocess.stdout.readline, '')
+            self.pulseprocess = subprocess.call([self.pulseclient, '-u', self.login, '-h', 'vpnssl.in.devexperts.com', '-r', 'AD Devex'],
+                                                 cwd=pulse_dir,
+                                                 stdin=subprocess.PIPE,
+                                                 stdout=subprocess.PIPE)
+            self.pulseprocess.stdin.write(self.password + '\n')
+            # TODO: Rewrite Status process
+            lines_iterator = iter(self.pulseprocess.stdout.readline, '')
             line = ''
             for line in lines_iterator:
-                # line iterator thought jvpn.pl for communicate and parsing stdout
                 print(line)
                 if line.startswith('Connected'):
                     update_status(line.split(',')[0])
@@ -160,7 +159,9 @@ class JVPN(threading.Thread):
 
     def disconnect(self):
         print('Disconnect process was called')
-        self.jvpnprocess.terminate()
+        self.pulseprocess_kill = subprocess.Popen([self.pulseclient, '-K'],
+                                             cwd=pulse_dir)
+        self.pulseprocess.terminate()
 
     def run(self):
         self.connect()
