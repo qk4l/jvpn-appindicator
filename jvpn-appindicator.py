@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Appindicator that together with jvpn https://github.com/samm-git/jvpn allow you to connect to Juniper VPN.
+Appindicator that provide GUI interface to communicate with Junos Pulse.
 jvpn-appindicator uses Gnome Keychain so you can be free to save credential with it
 """
 __author__ = 'Artyom Alexandrov <qk4l()tem4uk.ru>'
@@ -15,9 +15,11 @@ import appindicator
 import gnomekeyring
 import pynotify
 import threading
+import re
 import os
 import subprocess
 import sys
+import time
 
 gtk.gdk.threads_init()
 
@@ -30,6 +32,7 @@ else:
     pulse_dir = '/usr/local/pulse/'
 jvpn_icon = WORK_DIR + 'icons/junos-pulse.png'
 jvpn_icon_bw = WORK_DIR + 'icons/junos-pulse_bw.png'
+pulse_connected_pattern = 'Connection Status \:\n{2}\s*connection status : (\w+)\n\s*bytes sent \: (\d+)\n\s*bytes received \: (\d+)\n\s*Connection Mode : (\w+)\n\s+Encryption Type \: (.*)\n\s+Comp Type \: (\w+)\n\s+Assigned IP \: (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
 
 
 class JVPNIndicator:
@@ -51,27 +54,36 @@ class JVPNIndicator:
         separator = gtk.SeparatorMenuItem()
         separator.show()
         self.menu.append(separator)
+
         # jvpn connect menu
         self.btnconnect = gtk.MenuItem("Connect")
         self.btnconnect.connect("activate", self.connect)
         self.btnconnect.show()
+
+        # jvpn configure menu
+        self.btnconfigure = gtk.MenuItem("Configure")
+        self.btnconfigure.connect("activate", self.configure)
+        self.btnconfigure.show()
+
         # jvpn disconnect menu
         self.btndisconnect = gtk.MenuItem("Disconnect")
         self.btndisconnect.connect("activate", self.disconect)
+
         # quit menu
         btnquit = gtk.ImageMenuItem(gtk.STOCK_QUIT)
         btnquit.connect("activate", self.quit)
         btnquit.show()
         self.menu.append(self.btnconnect)
         self.menu.append(self.btndisconnect)
+        self.menu.append(self.btnconfigure)
         self.menu.append(btnquit)
         self.menu.show()
         self.ind.set_menu(self.menu)
-        self.t_jvpn = Pulse(None, None)
+        self.t_jvpn = Pulse(None, None, None, None)
 
     def update_status(self, msg):
         # Check status msg for future actions
-        if msg.find('Invalid user') != -1:
+        if msg.find('Error 104') != -1:
             self.invalid_cred = True
         self.status.get_child().set_text(msg)
 
@@ -90,6 +102,7 @@ class JVPNIndicator:
         # Close jvpn tread
         try:
             if self.t_jvpn.isAlive():
+                self.t_jvpn.event.set()
                 self.t_jvpn.disconnect()
         except:
             pass
@@ -101,31 +114,42 @@ class JVPNIndicator:
             # Check if previous connection was failed because invalid creds
             if self.invalid_cred:
                 self.invalid_cred = False
-                login, password = self.keyring.newpass()
+                login, password, host, realm = self.keyring.newpass()
             else:
-                login, password = self.keyring.getpass()
-            self.t_jvpn = Pulse(login, password)
+                login, password, host, realm = self.keyring.getpass()
+            self.t_jvpn = Pulse(login, password, host, realm)
             # Start jvpn thread
             self.t_jvpn.start()
             self.switch_btn(True)
+
+    def configure(self, widget, data=None):
+        self.keyring.getpass()
+        self.keyring.newpass()
 
     def disconect(self, widget, data=None):
         # Stop jvpn thread
         if self.t_jvpn.isAlive():
             self.t_jvpn.disconnect()
             self.switch_btn(False)
+            status = pulse_status()
+            update_status(status)
+            show_notify(status)
 
     def main(self):
         gtk.main()
 
 
 class Pulse(threading.Thread):
-    def __init__(self, login, password):
+    def __init__(self, login, password, host, realm):
         super(Pulse, self).__init__()
-        self.pulseclient = pulse_dir + 'PulseClient.sh'
+        threading.Thread.__init__(self)
+        self.event = threading.Event()
+        self.pulseclient = pulse_dir + 'pulsesvc'
         self.pulseprocess = ''
         self.login = login
         self.password = password
+        self.host = host
+        self.realm = realm
 
     def connect(self):
         print('Connect process was called')
@@ -136,32 +160,29 @@ class Pulse(threading.Thread):
             update_status(msg)
             return ''
         try:
-            self.pulseprocess = subprocess.call([self.pulseclient, '-u', self.login, '-h', 'vpnssl.in.devexperts.com', '-r', 'AD Devex'],
-                                                 cwd=pulse_dir,
-                                                 stdin=subprocess.PIPE,
-                                                 stdout=subprocess.PIPE)
+            self.pulseprocess = subprocess.Popen(
+                [self.pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
+                cwd=pulse_dir,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE)
             self.pulseprocess.stdin.write(self.password + '\n')
             # TODO: Rewrite Status process
-            lines_iterator = iter(self.pulseprocess.stdout.readline, '')
-            line = ''
-            for line in lines_iterator:
-                print(line)
-                if line.startswith('Connected'):
-                    update_status(line.split(',')[0])
-                    show_notify(line.split(',')[0])
-            if line.strip() == 'Exiting':
-                line = 'Not connected'
+            time.sleep(2)
+            status = pulse_status()
+            while not self.event.is_set():
+                status = pulse_status()
+                update_status(status)
+                time.sleep(10)
         except BaseException as e:
             print(e)
-            line = str(e)
-        update_status('[JVPN] ' + line.strip())
-        show_notify(line.strip())
+            status = str(e)
+        update_status(status.strip())
+        show_notify(status.strip())
 
     def disconnect(self):
         print('Disconnect process was called')
         self.pulseprocess_kill = subprocess.Popen([self.pulseclient, '-K'],
-                                             cwd=pulse_dir)
-        self.pulseprocess.terminate()
+                                                  cwd=pulse_dir)
 
     def run(self):
         self.connect()
@@ -174,6 +195,8 @@ class Keyring():
         self.keyring = gnomekeyring.get_default_keyring_sync()
         self.login = ''
         self.password = ''
+        self.host = ''
+        self.realm = ''
 
     def getpass(self):
         try:
@@ -185,8 +208,11 @@ class Keyring():
             # Todo: add some logging
             pass
         else:
-            self.login, self.password = result_list[0].secret.split('\n')
-        return self.login, self.password
+            try:
+                self.login, self.password, self.host, self.realm = result_list[0].secret.split('\n')
+            except:
+                pass
+        return self.login, self.password, self.host, self.realm
 
     def write2keyring(self):
         gnomekeyring.item_create_sync(
@@ -194,7 +220,7 @@ class Keyring():
             gnomekeyring.ITEM_GENERIC_SECRET,
             APP_NAME,
             dict(appname=APP_NAME),
-            "\n".join((self.login, self.password)), True)
+            "\n".join((self.login, self.password, self.host, self.realm)), True)
 
     def newpass(self):
         dialog = gtk.Dialog("Credentials to Junos Pulse", None, 0,
@@ -203,57 +229,79 @@ class Keyring():
         dialog.props.has_separator = False
         dialog.set_default_response(gtk.RESPONSE_OK)
 
-        hbox = gtk.HBox(False, 8)
-        hbox.set_border_width(8)
+        hbox = gtk.HBox(False, 10)
+        hbox.set_border_width(10)
         dialog.vbox.pack_start(hbox, False, False, 0)
 
         stock = gtk.image_new_from_stock(gtk.STOCK_DIALOG_AUTHENTICATION,
                                          gtk.ICON_SIZE_DIALOG)
         hbox.pack_start(stock, False, False, 0)
 
-        table = gtk.Table(2, 3)
+        table = gtk.Table(10, 5)
         table.set_row_spacings(5)
         table.set_col_spacings(5)
         hbox.pack_start(table, True, True, 0)
 
-        label = gtk.Label("_Login")
+        label = gtk.Label("_Host")
         label.set_use_underline(True)
         table.attach(label, 0, 1, 0, 1)
+        local_entry_host = gtk.Entry()
+        local_entry_host.set_text(self.host)
+        local_entry_host.set_activates_default(True)
+
+        table.attach(local_entry_host, 1, 2, 0, 1)
+        label.set_mnemonic_widget(local_entry_host)
+
+        label = gtk.Label("_Realm")
+        label.set_use_underline(True)
+        table.attach(label, 0, 1, 1, 2)
+        local_entry_realm = gtk.Entry()
+        local_entry_realm.set_text(self.realm)
+        local_entry_realm.set_activates_default(True)
+
+        table.attach(local_entry_realm, 1, 2, 1, 2)
+        label.set_mnemonic_widget(local_entry_realm)
+
+        label = gtk.Label("_Login")
+        label.set_use_underline(True)
+        table.attach(label, 0, 1, 3, 4)
         local_entry1 = gtk.Entry()
         local_entry1.set_text(self.login)
         local_entry1.set_activates_default(True)
 
-        table.attach(local_entry1, 1, 2, 0, 1)
+        table.attach(local_entry1, 1, 2, 3, 4)
         label.set_mnemonic_widget(local_entry1)
 
         label = gtk.Label("_Password")
         label.set_use_underline(True)
-        table.attach(label, 0, 1, 1, 2)
+        table.attach(label, 0, 1, 5, 6)
         local_entry2 = gtk.Entry()
 
         local_entry2.set_visibility(False)
         local_entry2.set_activates_default(True)
 
-        table.attach(local_entry2, 1, 2, 1, 2)
+        table.attach(local_entry2, 1, 2, 5, 6)
         label.set_mnemonic_widget(local_entry2)
 
-        savepass_btn = gtk.CheckButton('save password')
-        table.attach(savepass_btn, 1, 2, 2, 3)
+        savepass_btn = gtk.CheckButton('save config')
+        table.attach(savepass_btn, 1, 2, 7, 8)
 
         dialog.show_all()
         while True:
             response = dialog.run()
             if response == gtk.RESPONSE_OK:
+                self.host = local_entry_host.get_text()
+                self.realm = local_entry_realm.get_text()
                 self.login = local_entry1.get_text()
                 self.password = local_entry2.get_text()
-                if self.login and self.password:
+                if self.login and self.password and self.host and self.realm:
                     if savepass_btn.get_active():
                         self.write2keyring()
                     break
             else:
                 break
         dialog.destroy()
-        return self.login, self.password
+        return self.login, self.password, self.host, self.realm
 
 
 def update_status(msg):
@@ -270,6 +318,25 @@ def show_notify(msg):
     n.set_urgency(pynotify.URGENCY_NORMAL)
     n.show()
 
+
+def pulse_status():
+    """
+    Read status from pulse_status file
+    :return:
+    """
+    file_path = os.path.expanduser("~") + '/.pulse_secure/pulse/.pulse_status'
+    file = open(file_path, 'r')
+    file_data = file.read()
+    file.close()
+    match = re.match(pulse_connected_pattern, file_data)
+    if match:
+        output = 'Status: {status}, IP: {ip} ({recived}/{sent} bytes)'.format(status=match.group(1),
+                                                                              ip=match.group(7),
+                                                                              sent=match.group(2),
+                                                                              recived=match.group(3))
+    else:
+        output = file_data
+    return output.rstrip()
 
 if __name__ == "__main__":
     indicator = JVPNIndicator()
