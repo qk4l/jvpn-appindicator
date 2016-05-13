@@ -47,7 +47,7 @@ class JVPNIndicator:
         # create a menu
         self.menu = gtk.Menu()
         # create items for the menu
-        self.status = gtk.MenuItem('Not connected')
+        self.status = gtk.MenuItem(pulse_status())
         self.status.show()
         self.menu.append(self.status)
         # A separator
@@ -83,7 +83,7 @@ class JVPNIndicator:
 
     def update_status(self, msg):
         # Check status msg for future actions
-        if msg.find('Error 104') != -1:
+        if msg.find('Login failed') != -1:
             self.invalid_cred = True
         self.status.get_child().set_text(msg)
 
@@ -160,18 +160,23 @@ class Pulse(threading.Thread):
             update_status(msg)
             return ''
         try:
+            cur_status = pulse_status()
             self.pulseprocess = subprocess.Popen(
                 [self.pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
                 cwd=pulse_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE)
             self.pulseprocess.stdin.write(self.password + '\n')
-            # TODO: Rewrite Status process
-            time.sleep(2)
-            status = pulse_status()
+            update_status('Connecting...')
+            time.sleep(5)
             while not self.event.is_set():
                 status = pulse_status()
                 update_status(status)
+                if not 'Connected' in cur_status and 'Connected' in status:
+                    cur_status = status
+                    show_notify(status)
+                if 'Disconnected' in status:
+                    self.event.set()
                 time.sleep(10)
         except BaseException as e:
             print(e)
