@@ -144,7 +144,7 @@ class Pulse(threading.Thread):
         super(Pulse, self).__init__()
         threading.Thread.__init__(self)
         self.event = threading.Event()
-        self.pulseclient = pulse_dir + 'pulsesvc'
+        self.pulseclient = pulse_dir + 'PulseClient.sh'
         self.pulseprocess = ''
         self.login = login
         self.password = password
@@ -330,17 +330,23 @@ def pulse_status():
     :return:
     """
     file_path = os.path.expanduser("~") + '/.pulse_secure/pulse/.pulse_status'
-    file = open(file_path, 'r')
-    file_data = file.read()
-    file.close()
-    match = re.match(pulse_connected_pattern, file_data)
-    if match:
-        output = 'Status: {status}, IP: {ip} ({recived}/{sent} bytes)'.format(status=match.group(1),
-                                                                              ip=match.group(7),
-                                                                              sent=match.group(2),
-                                                                              recived=match.group(3))
-    else:
-        output = file_data
+    try:
+        pulse_secure_dir = os.path.dirname(file_path)
+        if not os.path.exists(pulse_secure_dir):
+            os.makedirs(pulse_secure_dir)
+        file = open(file_path, 'r')
+        file_data = file.read()
+        file.close()
+        match = re.match(pulse_connected_pattern, file_data)
+        if match:
+            output = 'Status: {status}, IP: {ip} ({recived}/{sent} bytes)'.format(status=match.group(1),
+                                                                                  ip=match.group(7),
+                                                                                  sent=match.group(2),
+                                                                                  recived=match.group(3))
+        else:
+            output = file_data
+    except:
+        output = 'Disconnected'
     return output.rstrip()
 
 if __name__ == "__main__":
