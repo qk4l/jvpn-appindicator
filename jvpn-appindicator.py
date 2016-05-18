@@ -1,14 +1,4 @@
 #!/usr/bin/env python
-"""
-Appindicator that provide GUI interface to communicate with Junos Pulse.
-jvpn-appindicator uses Gnome Keychain so you can be free to save credential with it
-"""
-__author__ = 'Artyom Alexandrov <qk4l()tem4uk.ru>'
-__license__ = """The MIT License (MIT) Copyright (c) [2015] [Artyom Alexandrov]"""
-
-import pygtk
-
-pygtk.require('2.0')
 import gtk
 import gobject
 import appindicator
@@ -18,18 +8,26 @@ import threading
 import re
 import os
 import subprocess
-import sys
 import time
+import pygtk
+pygtk.require('2.0')
+
+"""
+Appindicator that provide GUI interface to communicate with Junos Pulse.
+jvpn-appindicator uses Gnome Keychain so you can be free to save credential with it
+"""
+__author__ = 'Artyom Alexandrov <qk4l()tem4uk.ru>'
+__license__ = """The MIT License (MIT) Copyright (c) [2015] [Artyom Alexandrov]"""
+
 
 gtk.gdk.threads_init()
 
 # Config
 APP_NAME = 'jvpn-appindicator'
 WORK_DIR = os.path.dirname(os.path.realpath(__file__)) + '/'
-if len(sys.argv) > 1:
-    pulse_dir = sys.argv[1]
-else:
-    pulse_dir = '/usr/local/pulse/'
+
+pulse_dir = '/usr/local/pulse/'
+pulseclient = pulse_dir + 'PulseClient.sh'
 jvpn_icon = WORK_DIR + 'icons/junos-pulse.png'
 jvpn_icon_bw = WORK_DIR + 'icons/junos-pulse_bw.png'
 pulse_connected_pattern = 'Connection Status \:\n{2}\s*connection status : (\w+)\n\s*bytes sent \: (\d+)\n\s*bytes received \: (\d+)\n\s*Connection Mode : (\w+)\n\s+Encryption Type \: (.*)\n\s+Comp Type \: (\w+)\n\s+Assigned IP \: (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
@@ -61,7 +59,6 @@ class JVPNIndicator:
         self.btnconnect.show()
 
         # jvpn configure menu
-
         self.btnconfigure = gtk.MenuItem("Configure")
         self.btnconfigure.connect("activate", self.configure)
         self.btnconfigure.show()
@@ -69,6 +66,9 @@ class JVPNIndicator:
         # jvpn disconnect menu
         self.btndisconnect = gtk.MenuItem("Disconnect")
         self.btndisconnect.connect("activate", self.disconect)
+
+        if 'Connected' in pulse_status():
+            self.switch_btn(True)
 
         # quit menu
         btnquit = gtk.ImageMenuItem(gtk.STOCK_QUIT)
@@ -135,6 +135,13 @@ class JVPNIndicator:
             status = pulse_status()
             update_status(status)
             show_notify(status)
+        else:
+            subprocess.Popen(['/bin/bash', pulseclient, '-K'],
+                             cwd=pulse_dir)
+            self.switch_btn(False)
+            status = pulse_status()
+            update_status(pulse_status())
+            show_notify(status)
 
     def main(self):
         gtk.main()
@@ -145,13 +152,13 @@ class Pulse(threading.Thread):
         super(Pulse, self).__init__()
         threading.Thread.__init__(self)
         self.event = threading.Event()
-        self.pulseclient = pulse_dir + 'PulseClient.sh'
         self.pulseprocess = ''
         self.login = login
         self.password = password
         self.host = host
         self.realm = realm
 
+    @property
     def connect(self):
         print('Connect process was called')
 
@@ -163,7 +170,7 @@ class Pulse(threading.Thread):
         try:
             cur_status = pulse_status()
             self.pulseprocess = subprocess.Popen(
-                ['/bin/bash', self.pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
+                ['/bin/bash', pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
                 cwd=pulse_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE)
@@ -187,11 +194,11 @@ class Pulse(threading.Thread):
 
     def disconnect(self):
         print('Disconnect process was called')
-        self.pulseprocess_kill = subprocess.Popen([self.pulseclient, '-K'],
+        subprocess.Popen(['/bin/bash', pulseclient, '-K'],
                                                   cwd=pulse_dir)
 
     def run(self):
-        self.connect()
+        self.connect
         switch_btn(False)
         print('end jvpn thread')
 
@@ -349,6 +356,7 @@ def pulse_status():
     except:
         output = 'Disconnected'
     return output.rstrip()
+
 
 if __name__ == "__main__":
     indicator = JVPNIndicator()
