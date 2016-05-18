@@ -61,6 +61,7 @@ class JVPNIndicator:
         self.btnconnect.show()
 
         # jvpn configure menu
+
         self.btnconfigure = gtk.MenuItem("Configure")
         self.btnconfigure.connect("activate", self.configure)
         self.btnconfigure.show()
@@ -162,7 +163,7 @@ class Pulse(threading.Thread):
         try:
             cur_status = pulse_status()
             self.pulseprocess = subprocess.Popen(
-                [self.pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
+                ['/bin/bash', self.pulseclient, '-C', '-u', self.login, '-L', '2', '-h', self.host, '-r', self.realm],
                 cwd=pulse_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE)
